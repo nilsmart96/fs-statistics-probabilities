@@ -1,0 +1,346 @@
+---
+title: "Computational Statistics & Probability"
+subtitle: "Problem Set 2  \nLinear Models"
+author: "Author: Nils Marthiensen  \nCollaborators: Neelesh Bhalla, Chia-Jung Chang"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document: default
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Multiple Regression & Causal Models
+
+Return to the Howell1 dataset and consider the causal relationship between age and weight in children.
+Let’s define children as anyone younger than 13 and assume that age influences weight directly and through
+age-related physical changes that occur during development – physical attributes that a child’s height will
+serve as proxy. We may summarize this causal background knowledge by the DAG:
+
+```{r}
+library(rethinking)
+library(dagitty)
+dag1 <- dagitty( "dag {
+A -> W
+A -> H
+H -> W
+}")
+coordinates(dag1) <- list( x=c(A=0,H=1,W=2) , y=c(A=1,H=0,W=1) )
+drawdag( dag1 )
+```
+
+where Ai is age of child i, Hi is height of child i and W is weight of child i.
+
+a) What is the total causal effect of year-by-year growth of !Kung children on their weight? Construct a
+linear regression (m1a) to estimate the total causal effect of each year of growth on a !Kung child’s weight.
+Assume average birth weight is 4kg. Use prior predictive simulation to assess the implications of your priors.
+
+The total causal effect has to be estimated by only using age, because height is a pipe (see DAG). If the model used height and age, the pipe would be removed, also removing the indirect effect of age on weight. 
+Let's start by checking out a first prior, that starts at a mean birth weight of 4kg and a standard deviation of 2:
+
+```{r}
+# load data
+data(Howell1)
+d <- Howell1
+d2 <- d[ d$age < 13 , ]
+
+set.seed(1)
+
+# Number of lines and prior definition
+N <- 100
+a <- rnorm( N , 4 , 2 )
+b <- rnorm( N , 0 , 5 )
+
+# Visualization of the results
+plot( NULL , xlim=range(0:12) , ylim=c(-10,40) ,
+xlab="Age" , ylab="Weight" )
+abline( h=0 , lty=2 )
+mtext( "b ~ dnorm(0,5)" )
+for ( i in 1:N ) curve( a[i] + b[i]*x ,
+from=min(d2$age) , to=max(d2$age) , add=TRUE ,
+col=col.alpha("black",0.2) )
+```
+
+It starts in roughly the right area at birth, but there are already some values around 0 which doesn't make sense. The developments thereafter are even more off. Some kids seem to loose weight into negative numbers, while others gain weight extremely quickly. Let's try again with adjusted priors. Specifically, the relation of age and weight should be positive. This is reflected in the now introduced lognormal prior for the gradient (only allowing positive slopes). Also the standard deviation gets decreased by one.
+
+```{r}
+set.seed(1)
+
+# Number of lines and prior definition
+N <- 100
+a <- rnorm( N , 4 , 1 )
+b <- rlnorm( N , 0.5 , 0.5 )
+
+# Visualization of the results
+plot( NULL , xlim=range(0:12) , ylim=c(-10,40) ,
+xlab="Age" , ylab="Weight" )
+abline( h=0 , lty=2 )
+mtext( "b ~ dlnorm(0.5,0.5)" )
+for ( i in 1:N ) curve( a[i] + b[i]*x ,
+from=min(d2$age) , to=max(d2$age) , add=TRUE ,
+col=col.alpha("black",0.2) )
+```
+
+This is closer to what I would expect from a child's weight during 12 years of growth. One could even say it is a little bit too narrow, but I think the discrepancies at birth are not that big. Afterwards the prior allows for some different weight-gain speeds. Let's build a model with these priors.
+
+```{r}
+# fit model
+m1a <- quap(
+  alist(
+    weight ~ dnorm( mu , sigma ) ,
+    mu <- a + b*age ,
+    a ~ dnorm( 4 , 1 ) ,
+    b ~ dlnorm( 0.5 , 0.5 ) ,
+    sigma ~ dunif( 0 , 50 )
+    ) ,
+  data=d2 )
+
+(precis( m1a ))
+```
+
+Using precis, it can be observed that the mean causal effect of growth on weight is about 1.39 kg gain per year with a 89% compatibility interval ranging from about 1.25 to 1.43 kg gain per year. The relationship can also be observed visually.
+
+```{r}
+plot( weight ~ age , data=d2 , col=rangi2 )
+post <- extract.samples( m1a )
+a_map <- mean(post$a)
+b_map <- mean(post$b)
+curve( a_map + b_map*x , add=TRUE )
+```
+
+b) What is the total causal effect of height on weight? Construct a linear regression (m1b) to estimate the
+total causal effect height on a !Kung child’s weight. Use prior predictive simulation to assess the implication
+of your priors.
+
+Again some priors are checked out first. This time the mean can be used, because an estimation is produced in m1a. 7.05(a)+1.39(b)*4 is equal to 12.61. Thus for the next prior we assume a mean weight of a child at around 13kg. The relationship will be positive, so we an directly use the lognormal prior for the gradient. 
+
+```{r}
+set.seed(1)
+
+# Number of lines and prior definition
+N <- 100
+a <- rnorm( N , 13 , 2 )
+b <- rlnorm( N , 0 , 1 )
+
+# Visualization of the results
+plot( NULL , xlim=range(d2$height) , ylim=c(-10,40) ,
+xlab="Height" , ylab="Weight" )
+abline( h=0 , lty=2 )
+mtext( "b ~ dlnorm(0,1)" )
+xbar <- mean(d2$height)
+for ( i in 1:N ) curve( a[i] + b[i]*(x - xbar) ,
+from=min(d2$height) , to=max(d2$height) , add=TRUE ,
+col=col.alpha("black",0.2) )
+```
+
+This is all over the place, including negative weights. Let's try again with adjusted priors.
+
+```{r}
+set.seed(1)
+
+# Number of lines and prior definition
+N <- 100
+a <- rnorm( N , 13 , 2 )
+b <- rlnorm( N , -1.5 , 0.1 )
+
+# Visualization of the results
+plot( NULL , xlim=range(d2$height) , ylim=c(-10,40) ,
+xlab="Height" , ylab="Weight" )
+abline( h=0 , lty=2 )
+mtext( "b ~ dlnorm(-1.5,0.25)" )
+xbar <- mean(d2$height)
+for ( i in 1:N ) curve( a[i] + b[i]*(x - xbar) ,
+from=min(d2$height) , to=max(d2$height) , add=TRUE ,
+col=col.alpha("black",0.2) )
+```
+
+This looks better, alltough again maybe a little too narrow and some values around 0. Nevertheless let's do some modeling with these priors.
+
+```{r}
+# load data
+data(Howell1)
+d <- Howell1
+d2 <- d[ d$age < 13 , ]
+
+# define the average height, x-bar
+xbar <- mean(d2$height)
+
+# fit model
+m1b <- quap(
+  alist(
+    weight ~ dnorm( mu , sigma ) ,
+    mu <- a + b*( height - xbar ) ,
+    a ~ dnorm( 13 , 2 ) ,
+    b ~ dlnorm( -1.5 , 0.1 ) ,
+    sigma ~ dunif( 0 , 50 )
+    ) ,
+  data=d2 )
+
+(precis( m1b ))
+```
+
+The total causal effect of height on a child's weight can be described as follows. A child 1 cm taller is expected to be around 0.26 kg heavier. 89% of the posterior probability lies between roughly 0.25 and 0.26 kg weight gain for 1 cm more height. Again the result can also be observed visually.
+
+```{r}
+plot( weight ~ height , data=d2 , col=rangi2 )
+post <- extract.samples( m1b )
+a_map <- mean(post$a)
+b_map <- mean(post$b)
+curve( a_map + b_map*(x - xbar) , add=TRUE )
+```
+
+c) After knowing the age of a !Kung child, what additional value is there in also knowing the child’s height?
+Conversely, after knowing the height of a !Kung child, what additional value is there in also knowing the
+child’s age?
+
+To answer this question, another DAG, next to the one in the question, has to be considered. The following version is also consistent with models m1a and m1b.
+
+```{r}
+dag2 <- dagitty( "dag {
+A -> W
+A -> H
+}")
+coordinates(dag2) <- list( x=c(A=0,H=1,W=2) , y=c(A=1,H=0,W=1) )
+drawdag( dag2 )
+```
+
+Let's check out the conditional independencies. The first one doesn't have any, but the second one does.
+
+```{r}
+impliedConditionalIndependencies( dag2 )
+```
+
+This tells us that height is independent of weight, conditional on age. A multiple regression model can now be used to predict weight using both age and height. To answer the question it is compared to the models using just age or height. This will show us, which DAG is correct.
+
+```{r}
+# standardize variables
+d2$A <- scale( d2$age )
+d2$H <- scale( d2$height )
+d2$W <- scale( d2$weight )
+
+#fit models (all values are zero-centered now, so no need for estimating birth or average weights)
+m1age <- quap(
+  alist(
+    W ~ dnorm( mu , sigma ) ,
+    mu <- a + bA * A ,
+    a ~ dnorm( 0 , 0.2 ) ,
+    bA ~ dnorm( 0 , 0.5 ) ,
+    sigma ~ dexp( 1 )
+  ) , data = d2 )
+
+m1height <- quap(
+  alist(
+    W ~ dnorm( mu , sigma ) ,
+    mu <- a + bH * H ,
+    a ~ dnorm( 0 , 0.2 ) ,
+    bH ~ dnorm( 0 , 0.5 ) ,
+    sigma ~ dexp( 1 )
+  ) , data = d2 )
+
+m1all <- quap(
+  alist(
+    W ~ dnorm( mu , sigma ) ,
+    mu <- a + bA*A + bH*H ,
+    a ~ dnorm( 0 , 0.2 ) ,
+    bA ~ dnorm( 0 , 0.5 ) ,
+    bH ~ dnorm( 0 , 0.5 ) ,
+    sigma ~ dexp( 1 )
+  ) , data = d2 )
+
+# Visualize results
+plot( coeftab(m1age,m1height,m1all), par=c("bA","bH") )
+```
+
+The visualization helps to better understand what is going on in the three models.
+
+Once the height of a child is known, age gives only little new information, while increasing uncertainty. On the other hand knowing only age, information on height does introduce additional predictive power. In other words, height and weight are not independent given age. The first DAG is correct, the second one doesn't hold. This does not mean that age is not predictive of weight, just that height adds more information to age, but age does not add more information (or only little) to height.
+
+We can also check the prior of these models for the standardized variables, to make sure they are sensible.
+
+```{r}
+set.seed(1)
+prior <- extract.prior( m1age )
+mu <- link( m1age , post=prior , data=list( A=c(-2,2) ) )
+plot( NULL , xlim=c(-2,2) , ylim=c(-2,2) , xlab="Age (std)" , ylab="Weight (std)")
+for ( i in 1:50 ) lines( c(-2,2) , mu[i,] , col=col.alpha("black",0.4) )
+```
+
+Looks alright, but allowing for some extremely strong relationships. Still all theoretically possible, therefore the models should work fine. The priors of m1height are the same in this standardized version.
+
+## 2. Causal Influence with Categorical Variables
+
+The causal relationship between age and weight might be different for girls and boys.
+
+a) To investigate whether this is so, construct a single linear regression with a categorical variable for sex to
+estimate the total causal effect of age on weight separately for !Kung boys and girls. Plot your data and
+overlay the two regression lines, one for girls and one for boys.
+
+```{r}
+# construct index for sex
+d2$sex <- ifelse( d2$male==1 , 2 , 1 )
+
+# fit model
+m2a <- quap(
+  alist(
+    weight ~ dnorm( mu , sigma ) ,
+    mu <- a[sex] + b[sex]*age ,
+    a[sex] ~ dnorm( 4 , 1 ) ,
+    b[sex] ~ dlnorm( 0.5 , 0.5 ) ,
+    sigma ~ dunif( 0 , 50 )
+  ) , data=d2 )
+
+# plot data and both regression lines
+plot( weight ~ age , data=d2 , col=c("red","blue")[d2$sex])
+post <- extract.samples( m2a )
+a_map_fem <- mean(post$a[,1])
+a_map_male <- mean(post$a[,2])
+b_map_fem <- mean(post$b[,1])
+b_map_male <- mean(post$b[,2])
+curve( a_map_fem + b_map_fem*x , add=TRUE , col="red")
+curve( a_map_male + b_map_male*x , add=TRUE , col="blue")
+legend(x = "topleft",
+       legend = c("female", "male"),       
+       lty = c(1, 1),
+       col = c("red", "blue"),
+       lwd = 2)
+```
+
+The prior remains the same from m1a, so no need for further simulation. The two regression lines can be observed above. Overall, it seems that boys are a bit heavier at every age, compared to the girls.
+
+b) Do they differ? If so, provide one or more posterior contrasts as a summary.
+
+They do differ a little bit. It's hard to tell if the difference is constant over the years, so let's have a closer look in another plot.
+
+```{r}
+# HINT: the following code can be adapted to make a posterior contrast plot
+
+# contrast at each age, vector
+seq <- 0:12
+
+mu1 <- sim(m2a,data=list(age=seq,sex=rep(1,13)))
+mu2 <- sim(m2a,data=list(age=seq,sex=rep(2,13)))
+
+mu_contrast <- mu1
+for ( i in 1:13 ) mu_contrast[,i] <- mu2[,i] - mu1[,i]
+
+plot( x=seq, y=(colMeans(mu2)-colMeans(mu1)) , type="l" , xlim=c(0,13) , ylim=c(-15,15) , xlab="age" ,
+      ylab="weight difference (boys-girls)" )
+for ( p in c(0.5,0.67,0.89,0.99) ) # credibility intervals
+shade( apply(mu_contrast,2,PI,prob=p) , seq )
+abline(h=0,lty=2,lwd=2)
+```
+
+Here we can clearly observe that boys are indeed a bit heavier on average for the whole period. But now it actually becomes clear that the difference increases over the years. To see by how much on average (over the whole time period) we can use precis.
+
+```{r}
+precis( m2a , depth=2 )
+```
+
+```{r}
+# calculating the average weight difference using the values from precis
+(7.09+1.49*4) - (6.48+1.36*4)
+```
+The weight difference amounts to roughly 1.13kg on average over the course of the 12 years.
