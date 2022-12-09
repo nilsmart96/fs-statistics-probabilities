@@ -1,0 +1,248 @@
+---
+title: "Computational Statistics & Probability"
+subtitle: "Problem Set 3  \nInformation Criteria and Interactions"
+author: "Author: Nils Marthiensen  \nCollaborators: Neelesh Bhalla, Chia-Jung Chang"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Collider Bias and Information Criteria
+
+Return to the textbook example in §6.3.1, which explores the relationship between age, marriage and happiness.
+
+```{r}
+library(rethinking)
+d <- sim_happiness( seed=1515 , N_years=1000)
+d2 <- d[ d$age>17 , ] # only adults
+d2$A <- (d2$age - 18) / (65 - 18)
+d2$mid <- d2$married + 1
+precis(d)
+```
+
+Compare the two models, m6.9 and m6.10, using both PSIS and WAIC.
+
+```{r}
+# fit the two models
+m6.9 <- quap(
+  alist(
+    happiness ~ dnorm( mu , sigma ),
+    mu <- a[mid] + bA*A,
+    a[mid] ~ dnorm( 0 , 1 ),
+    bA ~ dnorm( 0 , 2 ),
+    sigma ~ dexp(1)
+  ) , data=d2 )
+
+m6.10 <- quap(
+  alist(
+    happiness ~ dnorm( mu , sigma ),
+    mu <- a + bA*A,
+    a ~ dnorm( 0 , 1 ),
+    bA ~ dnorm( 0 , 2 ),
+    sigma ~ dexp(1)
+  ) , data=d2 )
+
+# PSIS comparison
+compare( m6.9 , m6.10 , func=PSIS)
+plot( compare( m6.9, m6.10, func=PSIS))
+
+# WAIC comparison
+compare( m6.9 , m6.10)
+plot( compare( m6.9, m6.10))
+```
+
+a) Which model is expected to make better predictions according to these information criteria?
+
+It can easily be spotted, that m6.9 has both a smaller PSIS, as well as a smaller WAIC value, with all other values also being close to each other. A smaller value is generally regarded as better. So just from this information, we would expect m6.9 to make better predictions. But there is more to it.
+
+SE shows the approximate standard error of each WAIC and PSIS respectively. dWAIC and dPSIS show the difference between the best model and the other model(s). In this case, m6.9 is about 331 units of deviance smaller than m6.10. But to judge if the models can easily be distinguished, the standard error of their difference has to be considered. It amounts to about 34 in this case, clearly seperating the two models, which is also supported by the plots. pWAIC and pPSIS show the penalty terms and weight refers to the support of each model and sum to one. With a quick look it can be spotted that m6.9 is clearly preferred here, but the weight does not consider the standard errors, so at least those should also be considered when quickly comparing two models based on their relative support.
+
+b) On the basis of the causal model, how should you interpret the parameter estimates from the model preferred by PSIS and WAIC?
+
+WAIC or PSIS cannot be used to infer causation. We need the posterior distributions of multiple models, comparing the influence of different variables on the target, thereby examining the implied conditional independencies of relevant DAGs, to do that. WAIC and PSIS can only be used to get an idea about predictive accuracy, which can be different from causal truth. But it can be inferred from the result that including the marriage status improves the predictive accuracy of the results. 
+
+## 2. Laffer Curve
+
+In 2007 The Wall Street Journal published an editorial arguing that raising corporate tax rates increases government revenues only to a point, after which higher tax rates produce less revenue for governments. The editorial included the following graph of corporate tax rates in 29 countries plotted against tax revenue, over which a Laffer curve was drawn.
+
+```{r}
+knitr::include_graphics("csp3pic.png")
+```
+
+The data used in this plot are available in the rethinking package.
+
+```{r}
+data(Laffer)
+d <- Laffer
+precis( d )
+```
+
+a) Using this data, fit a basic regression that uses tax rate to predict tax revenue. Simulate and justify your priors.
+
+```{r}
+# standardize variables
+d$Rat <- scale( d$tax_rate )
+d$Rev <- scale( d$tax_revenue )
+
+# fit model
+m2a <- quap(
+  alist(
+    Rev ~ dnorm( mu , sigma ) ,
+    mu <- a + bRat * Rat ,
+    a ~ dnorm( 0 , 0.2 ) ,
+    bRat ~ dnorm( 0 , 0.5 ) ,
+    sigma ~ dexp( 1 )
+  ) , data = d )
+
+precis(m2a)
+```
+
+Basic regression is fitted. Let's check out if the used prior is sensible.
+
+```{r}
+set.seed(1)
+prior <- extract.prior( m2a )
+mu <- link( m2a , post=prior , data=list( Rat=c(-2,2) ) )
+plot( NULL , xlim=c(-2,2) , ylim=c(-2,2) , xlab="Tax Rate (std)" , ylab="Tax Revenue (std)")
+for ( i in 1:50 ) lines( c(-2,2) , mu[i,] , col=col.alpha("black",0.4) )
+```
+
+The chosen priors are relatively vague, while allowing for some extremely strong relationships. They are all within the potential space of observations however, therefore the models should work fine.
+
+b) Now construct and fit any curved model you wish to the data. Plot your straight-line model and your new curved model. Each plot should include 89% PI intervals.
+
+```{r}
+# fit curved model
+m2b <- quap(
+  alist(
+    Rev ~ dnorm( mu , exp(log_sigma) ),
+    mu <- a + b[1]*Rat + b[2]*Rat^2,
+    a ~ dnorm( 0.5 , 1 ),
+    b ~ dnorm( 0 , 10 ),
+    log_sigma ~ dnorm( 0 , 1 )
+  ), data=d , start=list(b=rep(0,2)) )
+
+# HINT: For standardized variables, the following line of code creates a
+# sequence useful for calculating mu and probability (credibility) intervals, PI
+
+rate.seq <- seq(from=-3.5, to=3.5, length.out=50)
+
+# plot line model m2a
+mu <- link( m2a , data=list(Rat=rate.seq) )
+mu.mean <- apply( mu , 2, mean )
+mu.PI <- apply( mu , 2 , PI )
+
+plot( Rev ~ Rat , data=d , col=rangi2 , xlab="Standardized Tax Rate" , ylab="Standardzed Tax Revenue")
+lines( rate.seq , mu.mean , lwd=2 )
+shade( mu.PI , rate.seq )
+
+#plot curved model m2b
+mu <- link( m2b , data=list(Rat=rate.seq) )
+mu.mean <- apply( mu , 2, mean )
+mu.PI <- apply( mu , 2 , PI )
+
+plot( Rev ~ Rat , data=d , col=rangi2 , xlab="Standardized Tax Rate" , ylab="Standardzed Tax Revenue")
+lines( rate.seq , mu.mean , lwd=2 )
+shade( mu.PI , rate.seq )
+```
+
+c) Using WAIC or PSIS, compare a straight-line model to your curved model. What conclusions would you draw from comparing your two models?
+
+```{r}
+compare( m2a , m2b , func=PSIS)
+
+plot( compare( m2a, m2b , func=PSIS))
+```
+
+Just looking at the PSIS value, the quadratic model m2b seems to have a little more predictive power than m2a. But we receive a warning of some exceptionally high pareto k values, indicating, that there might be highly influential outliers in the data. The plot shows that the models are not as clearly seperated as m6.9 and m6.10, and overall we cannot make out a clear favorite.
+
+d) There is one country with a high tax revenue which is an outlier. Use PSIS and WAIC to measure the importance of this outlier in the two models you fit.
+
+Let's first make a plot, to see what we are dealing with.
+
+```{r}
+set.seed(1)
+PSIS_m2a <- PSIS(m2a,pointwise=TRUE)
+set.seed(1)
+WAIC_m2a <- WAIC(m2a,pointwise=TRUE)
+plot( PSIS_m2a$k , WAIC_m2a$penalty , xlab="PSIS Pareto k" ,
+  ylab="WAIC penalty" , col=rangi2 , lwd=2 )
+abline(v = 0.6, lty = 3)
+abline(h = 0.7, lty = 3)
+```
+
+The outlier can immediately be spotted when considering its Pareto k value in PSIS and its penalty term for WAIC respectively. The plot shows both for the simple regression model m2a. It has about 4 times the Pareto k value of the upper end of the rest of the data, implying an extremely high influence of the result, while at the same time being very unlikely to be observed again. The high WAIC value also implies this. This could negatively impact the prediction performance of the model.
+
+Let's have a look at the quadratic model.
+
+```{r}
+set.seed(1)
+PSIS_m2b <- PSIS(m2b,pointwise=TRUE)
+set.seed(1)
+WAIC_m2b <- WAIC(m2b,pointwise=TRUE)
+plot( PSIS_m2b$k , WAIC_m2b$penalty , xlab="PSIS Pareto k" ,
+  ylab="WAIC penalty" , col=rangi2 , lwd=2 )
+abline(v = 0.6, lty = 3)
+abline(h = 0.7, lty = 3)
+```
+
+In the quadratic model m2b, most of the data is even closer together than in m2a. Here two countries are out of norm, but only one in an extreme sense, the same one as before. The same rule applies here, this outlier could negatively impact the prediction performance of the model. 
+
+e) Given your analysis, what conclusions do you draw about the relationship between tax rate and tax revenue? Do your conclusions support the original Laffer curve plot used in the editorial?
+
+To answer this question we first have to deal with the outlier. We just found out that it has an implausibly strong influence on our models, so let's do something about it. Just omitting it is never a good idea (In rare cases it can work, but we will not take this route here). Another way to adress the problem is to change the Gaussian error model. It is very "surprised" by outliers, due to the thin tails of the Gaussian distribution. While this is correct for many phenomena, there are some for which it is wrong to assume this. Let's implement a student-t distribution instead, reducing the influence of outliers while still including them. This works because of the thicker tails of this distribution. While keeping the same mean and scale of the Gaussian, an extra shape parameter is added to control the thickness of the tails. Let's test the quadratic and the linear version, as they were not clearly seperatble in 2c). 
+
+```{r}
+# fit linear model with student t distribution
+m2e_linear <- quap(
+  alist(
+    Rev ~ dstudent( 2,mu , sigma ) ,
+    mu <- a + bRat * Rat ,
+    a ~ dnorm( 0 , 0.2 ) ,
+    bRat ~ dnorm( 0 , 0.5 ) ,
+    sigma ~ dexp( 1 )
+  ) , data = d )
+
+# fit curved model with student t distribution
+m2e_curve <- quap(
+  alist(
+    Rev ~ dstudent( 2 , mu , exp(log_sigma) ),
+    mu <- a + b[1]*Rat + b[2]*Rat^2,
+    a ~ dnorm( 0.5 , 1 ),
+    b ~ dnorm( 0 , 10 ),
+    log_sigma ~ dnorm( 0 , 1 )
+  ), data=d , start=list(b=rep(0,2)) )
+
+# compare the two
+compare( m2e_linear , m2e_curve , func=PSIS)
+
+plot( compare( m2e_linear, m2e_curve , func=PSIS))
+```
+
+The curved model has a slightly lower PSIS value, but again the difference is not as clear as in 1). Let's check which model is still producing high pareto k values.
+
+```{r}
+PSIS(m2e_curve)
+```
+
+There is no warning when looking at PSIS of the curved model, so I will work with m2e_curved.
+
+```{r}
+#plot curved model m2e_curve
+mu <- link( m2e_curve , data=list(Rat=rate.seq) )
+mu.mean <- apply( mu , 2, mean )
+mu.PI <- apply( mu , 2 , PI )
+
+plot( Rev ~ Rat , data=d , col=rangi2 , xlab="Standardized Tax Rate" , ylab="Standardzed Tax Revenue")
+lines( rate.seq , mu.mean , lwd=2 )
+shade( mu.PI , rate.seq )
+```
+
+The 89% PI interval shrank significantly using the student t distribution, supporting its usage. There does seem to be a point after which tax revenue decreases with rising taxes, supporting the general laffer curve argument. But the curve looks vastly different to the one fitted in the article. In my opinion the curve in the article does not fit the actual data. While my curve does look better, there is not enough data to generally infer this kind of relationship or estimate were the maximum of the curve should be (or to even infer the curve shape). That being said the result here does seem more reasonable than the one in the article. 
