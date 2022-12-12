@@ -1,0 +1,399 @@
+---
+title: "Computational Statistics & Probability"
+subtitle: "Problem Set 4  \nHMC and Generalized Linear Models"
+author: "Author: Nils Marthiensen  \nCollaborators: Neelesh Bhalla, Chia-Jung Chang"
+date: "`r Sys.Date()`"
+output: 
+  pdf_document: 
+    latex_engine: xelatex
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Log-odds
+
+a) If an event has probability 0.3, what are the log-odds of this event?
+
+The formula for calculating log-odds is as follows:
+
+$log(\frac{x}{1-x})$
+
+with x being the probability. Let's plug our value into the equation.
+
+```{r}
+log(0.3/(1-0.3))
+```
+
+An x of 0.3 results in log-odds of roughly -0.85.
+
+b) If an event has log-odds of 1, what is the probability of that event?
+
+The formula for calculating probability is as follows:
+
+$\frac{1}{1 + e^{-x}}$
+
+with x being the log-odds. Let's plug our value into the equation.
+
+```{r}
+1/(1+exp(-1))
+```
+
+An x of 1 results in a probability of roughly 0.73.
+
+c) If a logistic regression coefficient has value -0.70, what does this imply about the proportional change in odds of the outcome? Briefly explain your answer.
+
+The coefficients in logistic regression are in terms of log-odds. Thus the coefficient -0.7 means that a one unit change in the input results in a -0.7 unit change in the log-odds. Numerically this can be expressed as follows.
+
+$log(\frac{x}{1-x}) = a + bX$
+
+This can be expressed in terms of odds by removing the log.
+
+$\frac{x}{1-x} = e^{a + bX}$
+
+Let's check out $e^{-0.7}$. 
+
+```{r}
+exp(-0.7)
+```
+
+It is roughly 0.5. This means that one unit change in input leads to a 0.5 times absolute change in the outcome, basically $outcome2=0.5*outcome1$ in this case.
+
+## 2. HMC, Interactions and Robust Priors
+
+Recall the interaction model m8.3, which is a varying-slope regression model assessing the effect of a country being inside or outside Africa on relationship between the ruggedness of its terrain and its GDP.
+
+```{r, message=FALSE}
+library(rethinking)
+
+# load and prepare data
+data(rugged)
+d <- rugged
+d$log_gdp <- log(d$rgdppc_2000)
+dd <- d[ complete.cases(d$rgdppc_2000) , ]
+dd$log_gdp_std <- dd$log_gdp / mean(dd$log_gdp)
+dd$rugged_std <- dd$rugged / max(dd$rugged)
+dd$cid <- ifelse( dd$cont_africa==1 , 1 , 2 )
+
+# fit model
+m8.3 <- quap(
+  alist(
+    log_gdp_std ~ dnorm(mu, sigma),
+    mu <- a[cid] + b[cid]*(rugged_std - 0.215) ,
+    a[cid] ~ dnorm(1, 0.1),
+    b[cid] ~ dnorm(0, 0.3),
+    sigma ~ dexp(1)
+  ), data = dd) # See R code 9.11 to prepare dd
+```
+
+a) Now fit this same model using Hamiltonian Monte Carlo (HMC). The code to do this is in the book, beginning with R code 9.13. You should use the ulam convenience function provided by the rethinking package.
+
+```{r, message=FALSE}
+# prepare data
+dat_slim <- list(
+  log_gdp_std = dd$log_gdp_std,
+  rugged_std = dd$rugged_std,
+  cid = as.integer( dd$cid )
+)
+str(dat_slim)
+
+#fit model
+m9.1 <- ulam(
+  alist(
+    log_gdp_std ~ dnorm( mu , sigma ) ,
+    mu <- a[cid] + b[cid]*( rugged_std - 0.215 ) ,
+    a[cid] ~ dnorm( 1 , 0.1 ) ,
+    b[cid] ~ dnorm( 0 , 0.3 ) ,
+    sigma ~ dexp( 1 )
+  ) , data=dat_slim , chains=4 , cores=2 ) # my laptop is a little older and has only two cores :(
+```
+
+b) Check your chains with traceplots and tankplots. Interpret these graphs to explain why, or why not, your HMC model is suitable for inference.
+
+```{r}
+# traceplot
+traceplot( m9.1 , chains=1)
+
+# trankplot
+trankplot( m9.1 , n_cols=2 )
+```
+
+Trace Plot: Even though the scaling is a little off, because the start is not at the right position, the rest of the plot looks good. The lines are stationary around a stable mean and there are no trends or values out of the ordinary. The model seems to work well. It looks similar for the other three chains.
+
+Trank Plot: It supports our observation from the trace plot. The lines are changing around all the time, which is a good sign. There should not be one line always above the others.
+
+c) Now fit your HMC model with a flat prior for sigma, sigma ~ dunif(0,1). What effect does this prior have on your posterior distribution? Explain your answer.
+
+```{r, message=FALSE, results='hide'}
+set.seed(1)
+# fit model
+m9.1c <- ulam(
+  alist(
+    log_gdp_std ~ dnorm( mu , sigma ) ,
+    mu <- a[cid] + b[cid]*( rugged_std - 0.215 ) ,
+    a[cid] ~ dnorm( 1 , 0.1 ) ,
+    b[cid] ~ dnorm( 0 , 0.3 ) ,
+    sigma ~ dunif( 0 , 1 )
+  ) , data=dat_slim , chains=4 , cores=2 )
+
+# check prior effect on posterior m9.1 and m9.1c
+post <- extract.samples( m9.1 )
+post_c <- extract.samples( m9.1c )
+dens( post$sigma , col='blue', ylim= c(0,75))
+dens( post_c$sigma , add = TRUE , col='red')
+```
+
+The differences are marginal. We can look at the prior distributions, to see if we can explain the high degree of similarity with them.
+
+```{r, message=FALSE, results='hide'}
+set.seed(1)
+# looking at the prior distribution of m9.1 and m9.1c
+priors <- extract.prior( m9.1 , n=1e4 )
+prior_c <- extract.prior( m9.1c , n=1e4 )
+
+ps <- inv_logit( priors$sigma )
+p_c <- inv_logit( prior_c$sigma )
+
+dens( ps , adj=0.1 , col='blue' , ylim = c(0, 6))
+dens( p_c , adj=0.1 , add=TRUE , col='red')
+```
+
+While being different in shape, both priors put most of their weight between 0.5 and 0.75. With an sufficient amount of data, similar posterior distributions can therefore be expected here.
+
+d) Now fit your model with the log normal prior b[cid] ~ dlnorm(0,1) for b. What effect does this prior have on your posterior distribution? Explain your answer.
+
+```{r, message=FALSE, results='hide'}
+# fit model
+m9.1d <- ulam(
+  alist(
+    log_gdp_std ~ dnorm( mu , sigma ) ,
+    mu <- a[cid] + b[cid]*( rugged_std - 0.215 ) ,
+    a[cid] ~ dnorm( 1 , 0.1 ) ,
+    b[cid] ~ dlnorm( 0 , 1 ) ,
+    sigma ~ dexp( 1 )
+  ) , data=dat_slim , chains=4 , cores=2 )
+
+# check prior effect on posterior m9.1 and m9.1d
+postb <- extract.samples( m9.1 )
+post_d <- extract.samples( m9.1d )
+
+dens( postb$b , col='blue' , ylim= c(0,9))
+dens( post_d$b , add=TRUE , col ='red')
+
+```
+
+This has a much stronger impact than playing around with sigma in 2c). The log-normal prior does not allow for negative values and the effect is very visible here. The shape also changes. Again we can look into the distributions of the priors in a bit more detail, to understand what leads to this outcome.
+
+```{r, message=FALSE, results='hide'}
+set.seed(1)
+# check prior effect on posterior m9.1 and m9.1d
+priorb <- extract.prior( m9.1 , n=1e4 )
+prior_d <- extract.prior( m9.1d , n=1e4 )
+
+pb <- inv_logit( priorb$b )
+p_d <- inv_logit( prior_d$b )
+
+dens( pb , adj=0.1 , col='blue', xlim= c(0.2,1), ylim= c(0, 8))
+dens( p_d , adj=0.1 , add=TRUE , col='red')
+```
+
+There are substantial differences in the prior distributions. m9.1 has a gaussian distribution around 0.5, while m9.1d starts at 0.5, and peaks at around 1.0. Everything before is cut off, leading to the big peak in the posterior right after zero. All values left of that are now at that point. Even the peak at 1 of the prior distribution cannot change that.
+
+## 3. Binomial Regression
+
+We started the course sampling marbles from a bucket to estimate its contents and tossing a globe to estimate the proportion of its surface covered in water. Each made use of the binomial distribution and was ideal to introduce the fundamentals of Bayesian inference. Nevertheless, Binomial regression – which is any type of GLM using a binomial mean-variance relationship – introduces complications that we needed to postpone until now.
+
+Return to the prosocial chimpanzee experiment in section §11.1 of the textbook, and the HMC model that features individual chimpanzee (actor) parameters actor and individual treatment parameters:
+
+```{r, message=FALSE, results='hide'}
+# load data
+data(chimpanzees)
+d <- chimpanzees
+
+# creating dummy variable
+d$treatment <- 1 + d$prosoc_left + 2*d$condition
+
+# prior trimmed data list
+dat_list <- list(
+pulled_left = d$pulled_left,
+actor = d$actor,
+treatment = as.integer(d$treatment) )
+
+# fit model
+m11.4 <- ulam(
+  alist(
+    pulled_left ~ dbinom( 1, p ),
+    logit(p) <- a[actor] + b[treatment] ,
+    a[actor] ~ dnorm( 0 , 1.5 ),
+    b[treatment] ~ dnorm( 0, 0.5 )
+  ), data = dat_list, chains=4, log_lik =TRUE) # See sec 11.1 to prepare dat_list
+```
+
+a) Compare m11.4 to a Laplacian quadratic approximate posterior distribution, constructed using quap(), that also includes individual parameters for actor and treatment. What are the differences and similarities between the two approximate posteriors? Explain your answer.
+
+```{r}
+# fit model
+m11.4a <- quap(
+  alist(
+    pulled_left ~ dbinom( 1, p ),
+    logit(p) <- a[actor] + b[treatment] ,
+    a[actor] ~ dnorm( 0 , 1.5 ),
+    b[treatment] ~ dnorm( 0, 0.5 )
+  ), data = dat_list )
+
+# plot posterior m11.4
+precis (m11.4, depth=2)
+
+# plot posterior m11.4a
+precis (m11.4a, depth = 2)
+```
+
+Both look very similar on first sight. Let's confirm this by visualizing the values.
+
+```{r}
+# ulam
+post <- extract.samples(m11.4)
+p_left <- inv_logit( post$a )
+plot( precis( as.data.frame(p_left) ) , xlim=c(0,1) )
+
+#quap
+post_a <- extract.samples(m11.4a)
+p_left_a <- inv_logit( post_a$a )
+plot( precis( as.data.frame(p_left_a) ) , xlim=c(0,1) )
+```
+
+Indeed the differences are minor. Let's check if we can find any differences in the visualizations the posterior distributions.
+
+```{r}
+# posterior of a
+post11.4_a <- extract.samples( m11.4 )
+post11.4a_a <- extract.samples( m11.4a )
+
+dens( post11.4_a$a , col='blue')
+dens( post11.4a_a$a , add=TRUE , col='red')
+
+# posterior of b
+post11.4_b <- extract.samples( m11.4 )
+post11.4a_b <- extract.samples( m11.4a )
+
+dens( post11.4_b$b , col='blue', ylim= c(0,0.9))
+dens( post11.4a_b$b, add=TRUE , col='red')
+```
+
+The two graphs confirm that both models are very similar. Let's check if they also both find the same treatment effects.
+
+```{r}
+# ulam
+diffs <- list(
+  db13 = post$b[,1] - post$b[,3],
+  db24 = post$b[,2] - post$b[,4] )
+plot( precis(diffs) )
+
+#quap
+diffs_a <- list(
+  db13 = post_a$b[,1] - post_a$b[,3],
+  db24 = post_a$b[,2] - post_a$b[,4] )
+plot( precis(diffs_a) )
+```
+
+Again only minimal differences between the two models. We can see here, that there is nearly no evidence for interaction between the location of the prosocial option (sharing food) and the presence of a partner. If there was, the simpler quap model might struggle, but these results show that they perform very similar.
+
+As a final check, let's see if PSIS also comes to the conclusion, that the models are very similar.
+
+```{r}
+compare(m11.4 , m11.4a, func=PSIS)
+```
+
+The two models are indeed extremely similar, I was not able to spot any major differences.
+
+b) Change the prior on the variable intercept to dnorm( 0 , 10) and estimate the posterior distribution with both ulam() and quap(). Do the differences between the two estimatations increase, decrease, or stay the same? Explain your answer.
+
+```{r, message=FALSE, results='hide'}
+# fit ulam model
+m11.4bu <- ulam(
+  alist(
+    pulled_left ~ dbinom( 1, p ),
+    logit(p) <- a[actor] + b[treatment] ,
+    a[actor] ~ dnorm( 0 , 10 ),
+    b[treatment] ~ dnorm( 0, 0.5 )
+  ), data = dat_list, chains=4, log_lik =TRUE)
+
+# fit quap model
+m11.4bq <- quap(
+  alist(
+    pulled_left ~ dbinom( 1, p ),
+    logit(p) <- a[actor] + b[treatment] ,
+    a[actor] ~ dnorm( 0 , 10 ),
+    b[treatment] ~ dnorm( 0, 0.5 )
+  ), data = dat_list )
+```
+
+```{r}
+# check prior effect on posterior m11.4bu
+precis(m11.4bu, depth = 2)
+
+# check posterior m11.4bq
+precis(m11.4bq, depth = 2)
+```
+
+a[2] is the only value that differs significantly in the two models. That is the monkey that always picked the same lever, for all iterations of the experiment. Let's check a plot of this, for better visualization of what is going on.
+
+```{r}
+# ulam
+post_bu <- extract.samples(m11.4bu)
+p_left_bu <- inv_logit( post_bu$a )
+plot( precis( as.data.frame(p_left_bu) ) , xlim=c(0,1) )
+
+#quap
+post_bq <- extract.samples(m11.4bq)
+p_left_bq <- inv_logit( post_bq$a )
+plot( precis( as.data.frame(p_left_bq) ) , xlim=c(0,1) )
+```
+
+Interestingly, while there is nearly no uncertainty in case of the MCMC model, uncertainty actually increased substantially with the Laplacian quadratic model. The predicted value also decreased a little for the latter, but not meaningful. The log-odds might lead one to believe otherwise, but it has to be remembered to reverse-transform - and the further away from zero, the smaller the impact.
+
+Let's check the posterior distributions visually, so we don't miss any other material differences between the two models.
+
+```{r}
+# posterior of a
+post11.4bu_a <- extract.samples( m11.4bu )
+post11.4bq_a <- extract.samples( m11.4bq )
+
+dens( post11.4bu_a$a , col='blue', ylim= c(0,0.6))
+dens( post11.4bq_a$a , add=TRUE, col='red')
+
+#posterior of b
+post11.4bu_b <- extract.samples( m11.4bu )
+post11.4bq_b <- extract.samples( m11.4bq )
+
+dens( post11.4bu_b$b , col='blue' , ylim= c(0,0.9))
+dens( post11.4bq_b$b , add=TRUE, col='red')
+```
+
+The posterior distributions are pretty similar, even though we observed increased uncertainty in the quadratic model. 
+
+As a final check, let's see if PSIS also comes to the conclusion, that ulam produces more accurate forecasts in this case.
+
+```{r}
+compare(m11.4bu , m11.4bq, func=PSIS)
+```
+
+PSIS confirms what could be spotted from the predictions. The lower uncertainty especially around the second chimpanzee leads to PSIS preferring the ulam model. We also get a warning for high pareto k values, but diving into that is out of the scope of this assignment.
+
+So the differences between the two respective models of 3a) and 3b) increase due to the different priors. Let's visualize them to grasp what is going on here.
+
+```{r}
+prior_a <- extract.prior( m11.4a , n=1e4 )
+prior_b <- extract.prior( m11.4bq , n=1e4 )
+
+p_a <- inv_logit( prior_a$a )
+p_b <- inv_logit( prior_b$a )
+
+dens( p_a , adj=0.1 , col='blue' , ylim = c(0, 26))
+dens( p_b , adj=0.1 , add=TRUE , col='red')
+```
+
+The relatively concentrated prior from 3a) on the intercept results in a flat non-informative but reasonable prior in the outcome for our model of chimpanzee behavior. The flat prior from 3b) on the intercept results in a prior in the outcome that believes chimpanzees either never or always pull the left lever. This is obviously not reasonable. It happens because a flat prior in the logit space does not result in a flat prior in the outcome probability space. The MCMC model does seem to handle this situation better than the quadratic one.
